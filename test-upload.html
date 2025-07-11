@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>上傳 API 測試</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .test-section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            padding: 0.5rem 1rem;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #4338ca;
+        }
+        .result {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #f3f4f6;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>PWA 上傳 API 測試</h1>
+    
+    <div class="test-section">
+        <h3>測試檔案上傳</h3>
+        <input type="file" id="fileInput" accept="image/*,video/*">
+        <button onclick="testUpload()">上傳檔案</button>
+        <div id="uploadResult" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>測試 API 狀態</h3>
+        <button onclick="testAPI()">檢查 API</button>
+        <div id="apiResult" class="result"></div>
+    </div>
+
+    <script>
+        async function testUpload() {
+            const fileInput = document.getElementById('fileInput');
+            const resultDiv = document.getElementById('uploadResult');
+            
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = '請選擇檔案';
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                resultDiv.textContent = '上傳中...';
+                
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.textContent = `上傳成功！\n檔案名稱: ${result.filename}\n檔案大小: ${result.size} bytes\n檔案類型: ${result.type}`;
+                } else {
+                    resultDiv.textContent = `上傳失敗: ${result.statusMessage || response.statusText}`;
+                }
+            } catch (error) {
+                resultDiv.textContent = `錯誤: ${error.message}`;
+            }
+        }
+        
+        async function testAPI() {
+            const resultDiv = document.getElementById('apiResult');
+            
+            try {
+                resultDiv.textContent = '檢查中...';
+                
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: new FormData()
+                });
+                
+                const result = await response.json();
+                resultDiv.textContent = `API 狀態: ${response.status}\n回應: ${JSON.stringify(result, null, 2)}`;
+            } catch (error) {
+                resultDiv.textContent = `API 錯誤: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html> 

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>離線模式 - PWA 離線檔案暫存系統</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    
+    .offline-container {
+      text-align: center;
+      max-width: 400px;
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      padding: 2rem;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .offline-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+    
+    h1 {
+      margin: 0 0 1rem 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    
+    p {
+      margin: 0 0 1rem 0;
+      opacity: 0.9;
+      line-height: 1.5;
+    }
+    
+    .status {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    
+    .online {
+      background: rgba(34, 197, 94, 0.2);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    
+    .offline {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    
+    .retry-btn {
+      background: rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: white;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      margin-top: 1rem;
+      transition: all 0.2s ease;
+    }
+    
+    .retry-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+    
+    .retry-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="offline-container">
+    <div class="offline-icon">📱</div>
+    <h1>目前處於離線狀態</h1>
+    <p>您的網路連線已中斷，但您的檔案已安全儲存在裝置中。</p>
+    <p>網路恢復後，檔案將自動上傳。</p>
+    
+    <div id="status" class="status offline">
+      <div id="statusText">🔴 離線</div>
+      <div id="statusMessage">正在等待網路連線...</div>
+    </div>
+    
+    <button id="retryBtn" class="retry-btn" onclick="checkConnection()">
+      檢查網路連線
+    </button>
+  </div>
+
+  <script>
+    let isOnline = navigator.onLine;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    
+    const statusEl = document.getElementById('status');
+    const statusTextEl = document.getElementById('statusText');
+    const statusMessageEl = document.getElementById('statusMessage');
+    const retryBtn = document.getElementById('retryBtn');
+    
+    function updateStatus() {
+      if (isOnline) {
+        statusEl.className = 'status online';
+        statusTextEl.textContent = '🟢 線上';
+        statusMessageEl.textContent = '網路已恢復，正在重新導向...';
+        retryBtn.disabled = true;
+        
+        // 延遲重新導向，讓用戶看到狀態
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 2000);
+      } else {
+        statusEl.className = 'status offline';
+        statusTextEl.textContent = '🔴 離線';
+        statusMessageEl.textContent = `正在等待網路連線... (嘗試 ${reconnectAttempts}/${maxReconnectAttempts})`;
+        retryBtn.disabled = false;
+      }
+    }
+    
+    function checkConnection() {
+      reconnectAttempts++;
+      
+      if (reconnectAttempts >= maxReconnectAttempts) {
+        statusMessageEl.textContent = '無法連線，請檢查網路設定';
+        retryBtn.disabled = true;
+        return;
+      }
+      
+      // 嘗試連線到一個簡單的資源
+      fetch('/favicon.ico', { 
+        method: 'HEAD',
+        cache: 'no-cache'
+      })
+      .then(() => {
+        isOnline = true;
+        updateStatus();
+      })
+      .catch(() => {
+        isOnline = false;
+        updateStatus();
+      });
+    }
+    
+    // 監聽網路狀態變化
+    window.addEventListener('online', () => {
+      isOnline = true;
+      reconnectAttempts = 0;
+      updateStatus();
+    });
+    
+    window.addEventListener('offline', () => {
+      isOnline = false;
+      updateStatus();
+    });
+    
+    // 定期檢查網路狀態（每 10 秒）
+    setInterval(() => {
+      if (!isOnline) {
+        checkConnection();
+      }
+    }, 10000);
+    
+    // 初始化狀態
+    updateStatus();
+    
+    // 頁面載入時檢查一次
+    setTimeout(checkConnection, 1000);
+  </script>
+</body>
+</html> 
