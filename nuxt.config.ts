@@ -16,7 +16,8 @@ export default defineNuxtConfig({
   },
   
   pwa: {
-    registerType: 'autoUpdate',
+    registerType: 'prompt',  // 改為提示模式，讓我們的插件處理註冊
+    injectRegister: false,  // 禁用自動注入註冊代碼
     // 移除 workbox 中的 injectManifest
     workbox: {
       navigateFallback: '/offline.html',
