@@ -122,6 +122,7 @@
           📋 手動註冊 SW
         </button>
         <button @click="testSWFile" class="btn btn-secondary">🔍 測試 SW 文件</button>
+        <button @click="fixIOSIssues" class="btn btn-warning" v-if="isIOSSafari()">🍎 修復 iOS 問題</button>
         <button @click="clearAllCaches" class="btn btn-danger">🗑️ 清除所有快取</button>
       </div>
     </div>
@@ -372,42 +373,120 @@ const registerSW = async () => {
   try {
     addLog('開始手動註冊 Service Worker...', 'info')
     
-    // 嘗試不同的 SW 路徑
-    const swPaths = ['/sw.js', '/_nuxt/sw.js', '/service-worker.js']
+    // iOS Safari PWA 專用邏輯
+    const isIOSSafari = /iPad|iPhone|iPod/.test(navigator.userAgent) && /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+    const isPWAMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true
+    
+    if (isIOSSafari && isPWAMode) {
+      addLog('檢測到 iOS Safari PWA 模式，使用特殊註冊策略', 'info')
+    }
+    
+    // 根據環境和平台確定 SW 路徑
+    const isDev = process.dev
+    let swPaths: string[]
+    
+    if (isIOSSafari && isPWAMode) {
+      // iOS Safari PWA - 只嘗試根路徑，因為 PWA 模式下 /_nuxt/ 路徑不可用
+      swPaths = ['/sw.js']
+      addLog('iOS Safari PWA 模式 - 僅嘗試根路徑', 'info')
+    } else if (isIOSSafari) {
+      // iOS Safari 瀏覽器模式
+      swPaths = isDev ? ['/sw.js', '/_nuxt/sw.js'] : ['/sw.js']
+    } else {
+      // 其他瀏覽器
+      swPaths = isDev ? ['/sw.js', '/_nuxt/sw.js'] : ['/sw.js']
+    }
+    
+    addLog(`當前環境: ${isDev ? '開發' : '生產'}，將嘗試路徑: ${swPaths.join(', ')}`, 'info')
+    
     let registered = false
     
     for (const path of swPaths) {
       try {
         addLog(`嘗試註冊路徑: ${path}`, 'info')
         
-        const registration = await navigator.serviceWorker.register(path, {
+        // iOS Safari PWA 需要特殊的註冊選項
+        const registrationOptions: RegistrationOptions = {
           scope: '/'
-        })
+        }
+        
+        // 對 iOS Safari PWA 使用更寬鬆的選項
+        if (isIOSSafari && isPWAMode) {
+          registrationOptions.updateViaCache = 'none'
+        }
+        
+        addLog(`註冊 URL: ${path}`, 'info')
+        
+        const registration = await navigator.serviceWorker.register(path, registrationOptions)
         
         addLog(`Service Worker 註冊成功: ${path}`, 'success')
         registered = true
         
-        // 等待啟動
-        await new Promise(resolve => {
-          if (registration.active) {
-            resolve(true)
-          } else {
-            registration.addEventListener('activate', resolve)
+        // iOS Safari 需要更長的等待時間
+        const waitTime = isIOSSafari ? 3000 : 1000
+        
+        // 等待啟動 - iOS Safari 需要特殊處理
+        if (isIOSSafari && isPWAMode) {
+          addLog('iOS Safari PWA - 等待 Service Worker 啟動...', 'info')
+          
+          // 強制更新和啟動
+          if (registration.waiting) {
+            registration.waiting.postMessage({ type: 'SKIP_WAITING' })
           }
-        })
+          
+          await new Promise(resolve => {
+            const checkActive = () => {
+              if (registration.active || navigator.serviceWorker.controller) {
+                resolve(true)
+              } else {
+                setTimeout(checkActive, 500)
+              }
+            }
+            checkActive()
+            
+            // 最多等待 5 秒
+            setTimeout(() => resolve(true), 5000)
+          })
+        } else {
+          await new Promise(resolve => {
+            if (registration.active) {
+              resolve(true)
+            } else {
+              registration.addEventListener('activate', resolve)
+              // 超時保護
+              setTimeout(() => resolve(true), waitTime)
+            }
+          })
+        }
+        
+        // iOS Safari PWA 需要額外的啟動步驟
+        if (isIOSSafari && isPWAMode && !navigator.serviceWorker.controller) {
+          addLog('iOS Safari PWA - 嘗試手動聲明控制權...', 'info')
+          
+          // 嘗試手動觸發 clients.claim()
+          if (registration.active) {
+            registration.active.postMessage({ type: 'CLIENTS_CLAIM' })
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          }
+        }
         
         break
-             } catch (error) {
-         addLog(`路徑 ${path} 註冊失敗: ${error instanceof Error ? error.message : String(error)}`, 'warning')
-       }
+      } catch (error) {
+        addLog(`路徑 ${path} 註冊失敗: ${error instanceof Error ? error.message : String(error)}`, 'warning')
+      }
     }
     
     if (!registered) {
       addLog('所有路徑都註冊失敗', 'error')
+      
+      // iOS Safari PWA 特殊提示
+      if (isIOSSafari && isPWAMode) {
+        addLog('iOS Safari PWA 提示: 可能需要重新安裝 PWA 或清除瀏覽器資料', 'warning')
+      }
     }
     
     // 重新檢查狀態
-    setTimeout(refreshStatus, 1000)
+    setTimeout(refreshStatus, 2000)
   } catch (error) {
     addLog(`手動註冊失敗: ${error instanceof Error ? error.message : String(error)}`, 'error')
   }
@@ -415,19 +494,70 @@ const registerSW = async () => {
 
 // 測試 Service Worker 文件
 const testSWFile = async () => {
-  const swPaths = ['/sw.js', '/_nuxt/sw.js', '/service-worker.js']
+  // 根據環境確定要測試的路徑
+  const isDev = process.dev
+  const swPaths = isDev 
+    ? ['/sw.js', '/_nuxt/sw.js', '/service-worker.js']  // 開發環境
+    : ['/sw.js', '/service-worker.js']  // 生產環境，移除 /_nuxt/ 路徑
+  
+  addLog(`當前環境: ${isDev ? '開發' : '生產'}`, 'info')
   
   for (const path of swPaths) {
     try {
-      const response = await fetch(path)
+      // 添加緩存清除參數以避免緩存問題
+      const testUrl = `${path}?t=${Date.now()}`
+      addLog(`測試路徑: ${path}`, 'info')
+      
+      const response = await fetch(testUrl, {
+        method: 'HEAD',  // 使用 HEAD 請求節省帶寬
+        cache: 'no-cache',  // 強制不使用緩存
+        headers: {
+          'Cache-Control': 'no-cache'
+        }
+      })
+      
       if (response.ok) {
         addLog(`✅ SW 文件存在: ${path} (${response.status})`, 'success')
+        // 獲取文件信息
+        const contentType = response.headers.get('content-type')
+        const contentLength = response.headers.get('content-length')
+        if (contentType) addLog(`   內容類型: ${contentType}`, 'info')
+        if (contentLength) addLog(`   文件大小: ${contentLength} bytes`, 'info')
       } else {
         addLog(`❌ SW 文件不存在: ${path} (${response.status})`, 'error')
       }
-         } catch (error) {
-       addLog(`❌ 無法訪問: ${path} - ${error instanceof Error ? error.message : String(error)}`, 'error')
-     }
+    } catch (error) {
+      addLog(`❌ 無法訪問: ${path} - ${error instanceof Error ? error.message : String(error)}`, 'error')
+      
+      // iOS Safari 特殊處理
+      if (isIOSSafari() && error instanceof Error) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+          addLog(`   iOS Safari 網路錯誤，可能是緩存或網路問題`, 'warning')
+        }
+      }
+    }
+  }
+  
+  // 額外測試：嘗試 fetch 實際內容
+  addLog('嘗試獲取 Service Worker 文件內容...', 'info')
+  try {
+    const response = await fetch('/sw.js', { cache: 'no-cache' })
+    if (response.ok) {
+      const content = await response.text()
+      if (content.length > 0) {
+        addLog(`✅ Service Worker 內容載入成功 (${content.length} 字符)`, 'success')
+        if (content.includes('workbox')) {
+          addLog(`   檢測到 Workbox: 是`, 'info')
+        }
+        if (content.includes('precacheAndRoute')) {
+          addLog(`   預快取功能: 已啟用`, 'info')
+        }
+      } else {
+        addLog(`⚠️ Service Worker 文件為空`, 'warning')
+      }
+    }
+  } catch (error) {
+    addLog(`❌ 無法獲取 SW 內容: ${error instanceof Error ? error.message : String(error)}`, 'error')
   }
 }
 
@@ -444,6 +574,58 @@ const clearAllCaches = async () => {
     } catch (error) {
       addLog(`清除快取失敗: ${error instanceof Error ? error.message : String(error)}`, 'error')
     }
+  }
+}
+
+// 檢查是否為 iOS Safari
+const isIOSSafari = () => {
+  if (!process.client) return false
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+}
+
+// 修復 iOS 特殊問題
+const fixIOSIssues = async () => {
+  if (!isIOSSafari()) return
+  
+  addLog('🍎 開始執行 iOS Safari PWA 修復流程...', 'info')
+  
+  try {
+    // 1. 檢查 PWA 模式
+    const isPWAMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true
+    addLog(`PWA 模式: ${isPWAMode ? '是' : '否'}`, 'info')
+    
+    // 2. 清除現有註冊
+    const registrations = await navigator.serviceWorker.getRegistrations()
+    for (const registration of registrations) {
+      await registration.unregister()
+      addLog('已清除現有 Service Worker 註冊', 'info')
+    }
+    
+    // 3. 清除所有快取
+    if ('caches' in window) {
+      const cacheNames = await caches.keys()
+      for (const name of cacheNames) {
+        await caches.delete(name)
+      }
+      addLog('已清除所有快取', 'info')
+    }
+    
+    // 4. 等待清理完成
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    
+    // 5. 重新註冊 Service Worker
+    addLog('重新註冊 Service Worker...', 'info')
+    await registerSW()
+    
+    // 6. 提供額外建議
+    addLog('修復完成！如果問題仍然存在，請嘗試以下步驟：', 'success')
+    addLog('1. 完全關閉 PWA 應用', 'info')
+    addLog('2. 從主畫面移除 PWA 圖示', 'info')
+    addLog('3. 重新在 Safari 中安裝 PWA', 'info')
+    addLog('4. 確保網路連線穩定', 'info')
+    
+  } catch (error) {
+    addLog(`iOS 修復失敗: ${error instanceof Error ? error.message : String(error)}`, 'error')
   }
 }
 
@@ -607,6 +789,15 @@ onMounted(() => {
 
 .btn-danger:hover:not(:disabled) {
   background: #b91c1c;
+}
+
+.btn-warning {
+  background: #f59e0b;
+  color: white;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: #d97706;
 }
 
 .diagnostics-section {
