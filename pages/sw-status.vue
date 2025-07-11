@@ -119,6 +119,7 @@
         <div class="action-buttons">
           <button @click="refreshStatus" class="btn btn-primary">🔄 重新檢測</button>
           <button @click="forceRegisterSW" class="btn btn-success">🚀 強制註冊 SW</button>
+          <button @click="forceActivateSW" class="btn btn-info">⚡ 強制啟動 SW</button>
           <button @click="testSWFile" class="btn btn-secondary">🔍 測試 SW 文件</button>
           <button @click="fixIOSIssues" class="btn btn-warning" v-if="isIOSSafari()">🍎 修復 iOS 問題</button>
           <button @click="clearAllCaches" class="btn btn-danger">🗑️ 清除所有快取</button>
@@ -503,6 +504,159 @@ const fixIOSIssues = async () => {
   }
 }
 
+// 強制啟動已註冊的 Service Worker
+const forceActivateSW = async () => {
+  if (!tests.value.swSupported) return
+  
+  addLog('⚡ 開始強制啟動 Service Worker...', 'info')
+  
+  try {
+    const registration = await navigator.serviceWorker.getRegistration()
+    
+    if (!registration) {
+      addLog('❌ 沒有找到已註冊的 Service Worker', 'error')
+      return
+    }
+    
+    addLog(`找到註冊: ${registration.scope}`, 'info')
+    addLog(`Installing: ${!!registration.installing}`, 'info')
+    addLog(`Waiting: ${!!registration.waiting}`, 'info')
+    addLog(`Active: ${!!registration.active}`, 'info')
+    
+    const isIOSSafari = /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+                       /Safari/.test(navigator.userAgent) && 
+                       !/Chrome/.test(navigator.userAgent)
+    const isPWAMode = window.matchMedia('(display-mode: standalone)').matches || 
+                     (window.navigator as any).standalone === true
+    
+    // 1. 處理 waiting 狀態的 Service Worker
+    if (registration.waiting) {
+      addLog('⏳ 發現等待中的 Service Worker，嘗試跳過等待...', 'info')
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' })
+      
+      // 等待 waiting 變成 active
+      await new Promise<void>(resolve => {
+        const checkActivation = () => {
+          if (registration.active) {
+            addLog('✅ Service Worker 已從 waiting 變為 active', 'success')
+            resolve()
+          } else {
+            setTimeout(checkActivation, 100)
+          }
+        }
+        checkActivation()
+        setTimeout(() => resolve(), 3000) // 超時保護
+      })
+    }
+    
+    // 2. 處理 installing 狀態的 Service Worker
+    if (registration.installing) {
+      addLog('🔧 Service Worker 正在安裝中，等待安裝完成...', 'info')
+      
+      await new Promise<void>(resolve => {
+        registration.installing!.addEventListener('statechange', function handler() {
+          addLog(`Service Worker 狀態變更: ${this.state}`, 'info')
+          
+          if (this.state === 'installed') {
+            addLog('📦 Service Worker 安裝完成', 'success')
+            // 可能進入 waiting 狀態，需要跳過
+            if (registration.waiting === this) {
+              addLog('⏳ 正在跳過等待狀態...', 'info')
+              this.postMessage({ type: 'SKIP_WAITING' })
+            }
+          } else if (this.state === 'activated') {
+            addLog('✅ Service Worker 已啟動', 'success')
+            this.removeEventListener('statechange', handler)
+            resolve()
+          }
+        })
+        
+        setTimeout(() => resolve(), 10000) // 10秒超時
+      })
+    }
+    
+    // 3. 檢查是否有 active 的 Service Worker
+    if (registration.active) {
+      addLog('✅ 發現 active Service Worker', 'success')
+      
+      // 檢查控制權
+      if (!navigator.serviceWorker.controller) {
+        addLog('⚠️ Service Worker 未取得頁面控制權，嘗試聲明控制權...', 'warning')
+        
+        // 發送 CLIENTS_CLAIM 訊息
+        registration.active.postMessage({ type: 'CLIENTS_CLAIM' })
+        
+        // iOS Safari PWA 需要額外處理
+        if (isIOSSafari && isPWAMode) {
+          addLog('🍎 iOS Safari PWA - 嘗試強制取得控制權...', 'info')
+          
+          // 多次嘗試
+          for (let i = 0; i < 3; i++) {
+            registration.active.postMessage({ type: 'CLIENTS_CLAIM' })
+            await new Promise(resolve => setTimeout(resolve, 500))
+            
+            if (navigator.serviceWorker.controller) {
+              addLog('✅ 成功取得控制權', 'success')
+              break
+            }
+          }
+          
+          // 如果還是沒有控制權，建議刷新頁面
+          if (!navigator.serviceWorker.controller) {
+            addLog('⚠️ 仍無法取得控制權，可能需要刷新頁面', 'warning')
+            
+            // 詢問是否刷新頁面
+            if (confirm('Service Worker 無法取得控制權，是否刷新頁面？')) {
+              window.location.reload()
+              return
+            }
+          }
+        } else {
+          // 非 iOS Safari，等待控制權
+          await new Promise<void>(resolve => {
+            const checkController = () => {
+              if (navigator.serviceWorker.controller) {
+                addLog('✅ 已取得控制權', 'success')
+                resolve()
+              } else {
+                setTimeout(checkController, 100)
+              }
+            }
+            checkController()
+            setTimeout(() => resolve(), 2000) // 2秒超時
+          })
+        }
+      } else {
+        addLog('✅ Service Worker 已有控制權', 'success')
+      }
+    } else {
+      addLog('❌ 沒有 active 的 Service Worker', 'error')
+      
+      // 嘗試更新註冊以觸發啟動
+      addLog('🔄 嘗試更新註冊以觸發啟動...', 'info')
+      try {
+        await registration.update()
+        addLog('📥 註冊更新完成', 'info')
+        
+        // 等待一段時間後重新檢查
+        setTimeout(async () => {
+          await refreshStatus()
+        }, 2000)
+      } catch (updateError) {
+        addLog(`❌ 註冊更新失敗: ${updateError}`, 'error')
+      }
+    }
+    
+    addLog('🎉 強制啟動流程完成', 'success')
+    
+    // 重新檢查狀態
+    setTimeout(refreshStatus, 1000)
+    
+  } catch (error) {
+    addLog(`❌ 強制啟動失敗: ${error instanceof Error ? error.message : String(error)}`, 'error')
+  }
+}
+
 // 強制重新註冊 Service Worker（使用插件中的邏輯）
 const forceRegisterSW = async () => {
   if (!tests.value.swSupported) return
@@ -605,9 +759,25 @@ const refreshStatus = async () => {
   addLog('檢測完成', 'success')
 }
 
+// 監聽 Service Worker 訊息
+const setupSWMessageListener = () => {
+  if (!process.client || !('serviceWorker' in navigator)) return
+  
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    addLog(`📨 收到 SW 訊息: ${JSON.stringify(event.data)}`, 'info')
+    
+    if (event.data && event.data.type === 'SW_ACTIVATED') {
+      addLog('🎉 Service Worker 已啟動並發送通知！', 'success')
+      // 重新檢查狀態
+      setTimeout(refreshStatus, 500)
+    }
+  })
+}
+
 // 初始化
 onMounted(() => {
   refreshStatus()
+  setupSWMessageListener()
 })
 </script>
 
@@ -772,6 +942,15 @@ onMounted(() => {
 
 .btn-success:hover:not(:disabled) {
   background: #059669;
+}
+
+.btn-info {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-info:hover:not(:disabled) {
+  background: #2563eb;
 }
 
 .diagnostics-section {

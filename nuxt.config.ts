@@ -26,6 +26,9 @@ export default defineNuxtConfig({
       clientsClaim: true,
       skipWaiting: true,
       cleanupOutdatedCaches: true,
+      
+      // 添加訊息處理邏輯 - 包含我們的擴展文件
+      importScripts: ['/sw-extension.js'],
 
       // 快取策略
       runtimeCaching: [
